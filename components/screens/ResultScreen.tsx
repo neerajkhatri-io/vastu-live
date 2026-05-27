@@ -44,6 +44,9 @@ export default function ResultScreen({
 
   useEffect(() => {
     let cancelled = false;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8000);
+
     setAiLoading(true);
     setAiError(false);
 
@@ -51,6 +54,7 @@ export default function ResultScreen({
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ direction: directionData, answers, scoreResult }),
+      signal: controller.signal,
     })
       .then((res) => {
         if (!res.ok) throw new Error(`API returned ${res.status}`);
@@ -64,9 +68,9 @@ export default function ResultScreen({
         }
       })
       .catch(() => { if (!cancelled) setAiError(true); })
-      .finally(() => { if (!cancelled) setAiLoading(false); });
+      .finally(() => { clearTimeout(timeout); if (!cancelled) setAiLoading(false); });
 
-    return () => { cancelled = true; };
+    return () => { cancelled = true; controller.abort(); clearTimeout(timeout); };
   }, [directionData, answers, scoreResult]);
 
   const tips = aiContent?.tips ?? staticTips;
