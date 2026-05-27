@@ -120,7 +120,7 @@ export default function ResultScreen({
         <DirectionCard directionData={directionData} heading={heading} />
 
         {/* AI personal reading */}
-        <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-4">
+        <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-4" style={{ isolation: 'isolate' }}>
           <div className="flex items-center justify-between mb-2">
             <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wide">
               Your Personal Reading
@@ -137,17 +137,19 @@ export default function ResultScreen({
               </span>
             )}
           </div>
-          {aiLoading ? (
-            <div className="space-y-2 animate-pulse">
-              <div className="h-4 bg-gray-200 rounded w-full" />
-              <div className="h-4 bg-gray-200 rounded w-5/6" />
-              <div className="h-4 bg-gray-200 rounded w-4/6" />
-            </div>
-          ) : (
-            <p className="text-sm text-gray-700 leading-relaxed">
-              {aiContent?.reading ?? directionData.reason}
-            </p>
-          )}
+          <div style={{ minHeight: '60px' }}>
+            {aiLoading ? (
+              <div className="space-y-2 animate-pulse">
+                <div className="h-4 bg-gray-200 rounded w-full" />
+                <div className="h-4 bg-gray-200 rounded w-5/6" />
+                <div className="h-4 bg-gray-200 rounded w-4/6" />
+              </div>
+            ) : (
+              <p className="text-sm text-gray-700 leading-relaxed">
+                {aiContent?.reading ?? directionData.reason}
+              </p>
+            )}
+          </div>
         </div>
 
         {/* Answers review */}

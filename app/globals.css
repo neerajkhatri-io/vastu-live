@@ -24,4 +24,6 @@ body {
   height: 100dvh;       /* accounts for Safari URL bar on iOS 15.4+ */
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
+  -webkit-transform: translateZ(0);
+  transform: translateZ(0);
 }
