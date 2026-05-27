@@ -40,29 +40,37 @@ export default function ResultScreen({
 
   const [aiContent, setAiContent] = useState<AiContent | null>(null);
   const [aiLoading, setAiLoading] = useState(true);
+  const [aiError, setAiError] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
     setAiLoading(true);
+    setAiError(false);
 
     fetch('/api/vastu-ai', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ direction: directionData, answers, scoreResult }),
     })
-      .then((res) => res.json())
+      .then((res) => {
+        if (!res.ok) throw new Error(`API returned ${res.status}`);
+        return res.json();
+      })
       .then((data: AiContent) => {
         if (!cancelled && data.reading && Array.isArray(data.tips)) {
           setAiContent(data);
+        } else if (!cancelled) {
+          setAiError(true);
         }
       })
-      .catch(() => {/* fall through to static tips */})
+      .catch(() => { if (!cancelled) setAiError(true); })
       .finally(() => { if (!cancelled) setAiLoading(false); });
 
     return () => { cancelled = true; };
   }, [directionData, answers, scoreResult]);
 
   const tips = aiContent?.tips ?? staticTips;
+  const isAI = !!aiContent;
 
   const handleShare = useCallback(async () => {
     const text = [
@@ -109,9 +117,22 @@ export default function ResultScreen({
 
         {/* AI personal reading */}
         <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-4">
-          <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-2">
-            Your Personal Reading
-          </h3>
+          <div className="flex items-center justify-between mb-2">
+            <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wide">
+              Your Personal Reading
+            </h3>
+            {!aiLoading && (
+              <span
+                className="text-xs font-semibold px-2 py-0.5 rounded-full"
+                style={isAI
+                  ? { backgroundColor: '#fef3c7', color: '#b45309' }
+                  : { backgroundColor: '#f3f4f6', color: '#9ca3af' }
+                }
+              >
+                {isAI ? '✨ AI personalised' : 'Standard'}
+              </span>
+            )}
+          </div>
           {aiLoading ? (
             <div className="space-y-2 animate-pulse">
               <div className="h-4 bg-gray-200 rounded w-full" />
@@ -154,11 +175,24 @@ export default function ResultScreen({
           <ScoreBar band={scoreResult.band} />
         </div>
 
-        {/* AI Tips */}
+        {/* Tips */}
         <div>
-          <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-3">
-            What to do next
-          </h3>
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wide">
+              What to do next
+            </h3>
+            {!aiLoading && (
+              <span
+                className="text-xs font-semibold px-2 py-0.5 rounded-full"
+                style={isAI
+                  ? { backgroundColor: '#fef3c7', color: '#b45309' }
+                  : { backgroundColor: '#f3f4f6', color: '#9ca3af' }
+                }
+              >
+                {isAI ? '✨ AI personalised' : 'Standard'}
+              </span>
+            )}
+          </div>
           {aiLoading ? (
             <div className="flex flex-col gap-2">
               {[1, 2, 3].map((i) => (
@@ -178,6 +212,11 @@ export default function ResultScreen({
                   <p className="text-sm text-gray-700 leading-relaxed">{tip}</p>
                 </div>
               ))}
+              {aiError && (
+                <p className="text-xs text-center text-gray-400 mt-1">
+                  Could not reach AI — showing standard advice
+                </p>
+              )}
             </div>
           )}
         </div>
