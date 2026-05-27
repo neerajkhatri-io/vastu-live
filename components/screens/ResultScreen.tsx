@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import type { DirectionData, ScoreResult } from '@/lib/vastu';
 import { getTips } from '@/lib/vastu';
 import { QUESTIONS } from '@/lib/questions';
@@ -23,6 +23,11 @@ const VERDICT: Record<string, { icon: string; text: string; bg: string; textColo
   serious: { icon: '❌', text: 'Your entrance has Vastu concerns', bg: '#fee2e2', textColor: '#b91c1c' },
 };
 
+interface AiContent {
+  reading: string;
+  tips: string[];
+}
+
 export default function ResultScreen({
   directionData,
   heading,
@@ -31,7 +36,33 @@ export default function ResultScreen({
   onRetake,
 }: ResultScreenProps) {
   const verdict = VERDICT[scoreResult.band];
-  const tips = getTips(directionData, scoreResult);
+  const staticTips = getTips(directionData, scoreResult);
+
+  const [aiContent, setAiContent] = useState<AiContent | null>(null);
+  const [aiLoading, setAiLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    setAiLoading(true);
+
+    fetch('/api/vastu-ai', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ direction: directionData, answers, scoreResult }),
+    })
+      .then((res) => res.json())
+      .then((data: AiContent) => {
+        if (!cancelled && data.reading && Array.isArray(data.tips)) {
+          setAiContent(data);
+        }
+      })
+      .catch(() => {/* fall through to static tips */})
+      .finally(() => { if (!cancelled) setAiLoading(false); });
+
+    return () => { cancelled = true; };
+  }, [directionData, answers, scoreResult]);
+
+  const tips = aiContent?.tips ?? staticTips;
 
   const handleShare = useCallback(async () => {
     const text = [
@@ -40,21 +71,16 @@ export default function ResultScreen({
       `Status: ${verdict.text}`,
       `Score: ${scoreResult.label}`,
       ``,
-      `${directionData.reason}`,
+      aiContent?.reading ?? directionData.reason,
       ``,
-      `Next steps:`,
+      `What to do next:`,
       ...tips.map((t, i) => `${i + 1}. ${t}`),
       ``,
       `Checked with Vastu Check app`,
     ].join('\n');
 
     if (navigator.share) {
-      try {
-        await navigator.share({ text });
-        return;
-      } catch {
-        // fall through to clipboard
-      }
+      try { await navigator.share({ text }); return; } catch { /* fall through */ }
     }
     try {
       await navigator.clipboard.writeText(text);
@@ -62,15 +88,12 @@ export default function ResultScreen({
     } catch {
       alert('Could not share — please copy manually.');
     }
-  }, [directionData, heading, verdict, scoreResult, tips]);
+  }, [directionData, heading, verdict, scoreResult, aiContent, tips]);
 
   return (
     <div className="flex flex-col min-h-full">
       {/* Header verdict strip */}
-      <div
-        className="px-6 py-5 text-center"
-        style={{ backgroundColor: verdict.bg }}
-      >
+      <div className="px-6 py-5 text-center" style={{ backgroundColor: verdict.bg }}>
         <p className="text-3xl mb-1">{verdict.icon}</p>
         <h2
           className="text-xl font-semibold"
@@ -80,10 +103,27 @@ export default function ResultScreen({
         </h2>
       </div>
 
-      {/* Scrollable content */}
       <div className="flex-1 px-6 py-6 flex flex-col gap-6">
         {/* Gate direction card */}
         <DirectionCard directionData={directionData} heading={heading} />
+
+        {/* AI personal reading */}
+        <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-4">
+          <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-2">
+            Your Personal Reading
+          </h3>
+          {aiLoading ? (
+            <div className="space-y-2 animate-pulse">
+              <div className="h-4 bg-gray-200 rounded w-full" />
+              <div className="h-4 bg-gray-200 rounded w-5/6" />
+              <div className="h-4 bg-gray-200 rounded w-4/6" />
+            </div>
+          ) : (
+            <p className="text-sm text-gray-700 leading-relaxed">
+              {aiContent?.reading ?? directionData.reason}
+            </p>
+          )}
+        </div>
 
         {/* Answers review */}
         <div>
@@ -95,10 +135,7 @@ export default function ResultScreen({
               const ans = answers[q.id];
               const implication = ans ? q.yesImplication : q.noImplication;
               return (
-                <div
-                  key={q.id}
-                  className="bg-white rounded-xl border border-gray-100 shadow-sm p-3"
-                >
+                <div key={q.id} className="bg-white rounded-xl border border-gray-100 shadow-sm p-3">
                   <div className="flex items-start gap-2">
                     <span className="text-base mt-0.5">{ans ? '✓' : '✗'}</span>
                     <div>
@@ -117,27 +154,32 @@ export default function ResultScreen({
           <ScoreBar band={scoreResult.band} />
         </div>
 
-        {/* Tips */}
+        {/* AI Tips */}
         <div>
           <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-3">
             What to do next
           </h3>
-          <div className="flex flex-col gap-2">
-            {tips.map((tip, i) => (
-              <div
-                key={i}
-                className="bg-white rounded-xl border border-gray-100 shadow-sm p-4 flex gap-3"
-              >
-                <span
-                  className="text-base font-bold flex-shrink-0 mt-0.5"
-                  style={{ color: '#C17F2B' }}
-                >
-                  {i + 1}.
-                </span>
-                <p className="text-sm text-gray-700 leading-relaxed">{tip}</p>
-              </div>
-            ))}
-          </div>
+          {aiLoading ? (
+            <div className="flex flex-col gap-2">
+              {[1, 2, 3].map((i) => (
+                <div key={i} className="bg-white rounded-xl border border-gray-100 shadow-sm p-4 animate-pulse">
+                  <div className="h-4 bg-gray-200 rounded w-full mb-2" />
+                  <div className="h-4 bg-gray-200 rounded w-3/4" />
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="flex flex-col gap-2">
+              {tips.map((tip, i) => (
+                <div key={i} className="bg-white rounded-xl border border-gray-100 shadow-sm p-4 flex gap-3">
+                  <span className="text-base font-bold flex-shrink-0 mt-0.5" style={{ color: '#C17F2B' }}>
+                    {i + 1}.
+                  </span>
+                  <p className="text-sm text-gray-700 leading-relaxed">{tip}</p>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* Actions */}
