@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import Image from 'next/image';
 import type { DirectionData, ScoreResult } from '@/lib/vastu';
 import { getTips } from '@/lib/vastu';
 import { QUESTIONS } from '@/lib/questions';
@@ -41,12 +42,13 @@ export default function ResultScreen({
   const [aiContent, setAiContent] = useState<AiContent | null>(null);
   const [aiLoading, setAiLoading] = useState(true);
   const [aiError, setAiError] = useState(false);
+  const [pdfGenerating, setPdfGenerating] = useState(false);
 
   // Capture props at mount time — never re-run this effect.
   // directionData/answers/scoreResult are objects whose references change on
   // every parent render (compass heading updates), which would re-trigger the
   // call on every tick. We only ever want ONE call per result screen mount.
-  const initRef = useRef({ directionData, answers, scoreResult });
+  const initRef = useRef({ directionData, answers, scoreResult, heading });
 
   useEffect(() => {
     const { directionData: dir, answers: ans, scoreResult: score } = initRef.current;
@@ -81,9 +83,355 @@ export default function ResultScreen({
   const tips = aiContent?.tips ?? staticTips;
   const isAI = !!aiContent;
 
+  const generatePDF = useCallback(async () => {
+    setPdfGenerating(true);
+    try {
+      const { jsPDF } = await import('jspdf');
+
+      const { directionData: dir, answers: ans, scoreResult: score, heading: h } = initRef.current;
+      const W = 210, H = 297;
+      const M = 14;
+      const CW = W - M * 2;
+      let y = 0;
+
+      const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+
+      // Warm off-white background
+      doc.setFillColor(250, 248, 245);
+      doc.rect(0, 0, W, H, 'F');
+
+      // Load logo once for reuse
+      let logoB64: string | null = null;
+      try {
+        const resp = await fetch('/logo.png');
+        const blob = await resp.blob();
+        logoB64 = await new Promise<string>((resolve) => {
+          const fr = new FileReader();
+          fr.onload = () => resolve(fr.result as string);
+          fr.readAsDataURL(blob);
+        });
+      } catch { /* logo optional */ }
+
+      // Draw a new background on page N and reset y
+      const newPage = () => {
+        doc.addPage();
+        doc.setFillColor(250, 248, 245);
+        doc.rect(0, 0, W, H, 'F');
+        y = 14;
+      };
+
+      const checkBreak = (needed: number) => {
+        if (y + needed > H - 40) newPage();
+      };
+
+      const sectionLabel = (text: string) => {
+        doc.setFontSize(6.5);
+        doc.setFont('helvetica', 'bold');
+        doc.setTextColor(160, 140, 110);
+        doc.text(text.toUpperCase(), M, y + 4);
+        y += 7;
+      };
+
+      // ── HEADER ───────────────────────────────────────────────────────
+      doc.setFillColor(193, 127, 43);
+      doc.rect(0, 0, W, 36, 'F');
+      doc.setFillColor(220, 155, 65);
+      doc.rect(0, 0, W, 3, 'F');
+
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(21);
+      doc.setTextColor(255, 255, 255);
+      doc.text('VASTU CHECK', M, 16);
+
+      doc.setFontSize(9);
+      doc.setFont('helvetica', 'normal');
+      doc.setTextColor(255, 240, 210);
+      doc.text('Personal Entrance Report', M, 23);
+
+      doc.setFontSize(7.5);
+      doc.setTextColor(255, 228, 175);
+      const today = new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' });
+      doc.text(today, M, 30);
+
+      if (logoB64) {
+        doc.addImage(logoB64, 'PNG', W - M - 26, 4, 26, 28);
+      }
+
+      y = 42;
+
+      // ── VERDICT STRIP ────────────────────────────────────────────────
+      const vBgMap: Record<string, [number, number, number]> = {
+        excellent: [220, 252, 231], good: [220, 252, 231],
+        fair: [254, 243, 199], 'needs-attention': [254, 243, 199],
+        serious: [254, 226, 226],
+      };
+      const vFgMap: Record<string, [number, number, number]> = {
+        excellent: [21, 128, 61], good: [21, 128, 61],
+        fair: [180, 83, 9], 'needs-attention': [180, 83, 9],
+        serious: [185, 28, 28],
+      };
+      const vBg = vBgMap[score.band] ?? [220, 252, 231];
+      const vFg = vFgMap[score.band] ?? [21, 128, 61];
+
+      doc.setFillColor(...vBg);
+      doc.roundedRect(M, y, CW, 13, 2, 2, 'F');
+      doc.setFontSize(10);
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(...vFg);
+      doc.text(verdict.text, M + 5, y + 9);
+
+      y += 19;
+
+      // ── DIRECTION CARD ───────────────────────────────────────────────
+      checkBreak(36);
+      sectionLabel('Gate Direction');
+
+      const statusColorMap: Record<string, [number, number, number]> = {
+        best: [21, 128, 61], auspicious: [21, 128, 61],
+        neutral: [180, 83, 9], inauspicious: [185, 28, 28], worst: [185, 28, 28],
+      };
+      const dirC = statusColorMap[dir.status] ?? [100, 100, 100];
+
+      doc.setFillColor(255, 255, 255);
+      doc.roundedRect(M, y, CW, 27, 2, 2, 'F');
+      doc.setDrawColor(...dirC);
+      doc.setLineWidth(0.5);
+      doc.roundedRect(M, y, CW, 27, 2, 2, 'S');
+
+      doc.setFontSize(15);
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(50, 40, 30);
+      doc.text(dir.name, M + 5, y + 11);
+
+      const nameW = doc.getTextWidth(dir.name);
+      doc.setFillColor(...dirC);
+      doc.roundedRect(M + 5 + nameW + 2, y + 4, 11, 6, 1.5, 1.5, 'F');
+      doc.setFontSize(7.5);
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(255, 255, 255);
+      doc.text(dir.shortCode, M + 5 + nameW + 7.5, y + 8.5, { align: 'center' });
+
+      doc.setFontSize(7.5);
+      doc.setFont('helvetica', 'normal');
+      doc.setTextColor(100, 88, 72);
+      const bearingStr = h ? `${Math.round(h)}°` : dir.shortCode;
+      doc.text(`Deity: ${dir.deity}  •  Element: ${dir.element}  •  Bearing: ${bearingStr}`, M + 5, y + 18);
+
+      const reasonLines = doc.splitTextToSize(dir.reason, CW - 12);
+      doc.setFontSize(7.5);
+      doc.setTextColor(70, 60, 50);
+      doc.text(reasonLines[0], M + 5, y + 24);
+
+      y += 33;
+
+      // ── SCORE BAR ────────────────────────────────────────────────────
+      checkBreak(24);
+      sectionLabel('Overall Vastu Score');
+
+      type RGB = [number, number, number];
+      const segDefs: { key: string; label: string; active: RGB; activeTxt: RGB }[] = [
+        { key: 'serious',          label: 'Serious',      active: [185, 28, 28],  activeTxt: [255, 255, 255] },
+        { key: 'needs-attention',  label: 'Needs Attn',   active: [185, 28, 28],  activeTxt: [255, 255, 255] },
+        { key: 'fair',             label: 'Fair',         active: [180, 83, 9],   activeTxt: [255, 255, 255] },
+        { key: 'good',             label: 'Good',         active: [21, 128, 61],  activeTxt: [255, 255, 255] },
+        { key: 'excellent',        label: 'Excellent',    active: [21, 128, 61],  activeTxt: [255, 255, 255] },
+      ];
+      const segW = CW / 5;
+      segDefs.forEach((s, i) => {
+        const on = s.key === score.band;
+        const bx = M + i * segW;
+        if (on) {
+          doc.setFillColor(...s.active);
+          doc.setDrawColor(...s.active);
+        } else {
+          doc.setFillColor(242, 240, 235);
+          doc.setDrawColor(210, 205, 195);
+        }
+        doc.setLineWidth(0.3);
+        doc.rect(bx, y, segW, 9, 'FD');
+        doc.setFontSize(6);
+        doc.setFont('helvetica', on ? 'bold' : 'normal');
+        doc.setTextColor(...(on ? s.activeTxt : ([155, 145, 130] as RGB)));
+        doc.text(s.label, bx + segW / 2, y + 6, { align: 'center' });
+      });
+      doc.setFontSize(8);
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(70, 60, 50);
+      doc.text(`Score: ${score.score} / 7  —  ${score.label}`, M, y + 15);
+
+      y += 21;
+
+      // ── PERSONAL READING ─────────────────────────────────────────────
+      const readingText = aiContent?.reading ?? dir.reason;
+      const readingLines = doc.splitTextToSize(readingText, CW - 14);
+      const readingH = Math.max(16, readingLines.length * 4.2 + 10);
+
+      checkBreak(readingH + 14);
+      sectionLabel(isAI ? 'AI-Personalised Reading' : 'Personal Reading');
+
+      doc.setFillColor(255, 255, 255);
+      doc.roundedRect(M, y, CW, readingH, 2, 2, 'F');
+      doc.setDrawColor(230, 220, 200);
+      doc.setLineWidth(0.3);
+      doc.roundedRect(M, y, CW, readingH, 2, 2, 'S');
+
+      if (isAI) {
+        doc.setFillColor(254, 243, 199);
+        doc.roundedRect(CW + M - 30, y + 2, 28, 5.5, 1.5, 1.5, 'F');
+        doc.setFontSize(6);
+        doc.setFont('helvetica', 'bold');
+        doc.setTextColor(180, 83, 9);
+        doc.text('AI PERSONALISED', CW + M - 16, y + 5.8, { align: 'center' });
+      }
+
+      doc.setFontSize(8.5);
+      doc.setFont('helvetica', 'normal');
+      doc.setTextColor(60, 50, 40);
+      doc.text(readingLines, M + 5, y + 7.5);
+
+      y += readingH + 9;
+
+      // ── YOUR ANSWERS ─────────────────────────────────────────────────
+      checkBreak(55);
+      sectionLabel('Your Answers');
+
+      QUESTIONS.forEach((q) => {
+        const a = ans[q.id];
+        const impl = a ? q.yesImplication : q.noImplication;
+        const label = a ? 'YES' : 'NO';
+        const badgeColor: RGB = a ? [21, 128, 61] : [185, 28, 28];
+
+        const qLines = doc.splitTextToSize(q.text, CW - 26);
+        const iLines = doc.splitTextToSize(impl, CW - 26);
+        const rowH = (qLines.length + iLines.length) * 3.8 + 9;
+
+        checkBreak(rowH + 3);
+
+        doc.setFillColor(255, 255, 255);
+        doc.roundedRect(M, y, CW, rowH, 1.5, 1.5, 'F');
+        doc.setDrawColor(232, 225, 212);
+        doc.setLineWidth(0.3);
+        doc.roundedRect(M, y, CW, rowH, 1.5, 1.5, 'S');
+
+        // YES/NO badge
+        doc.setFillColor(...badgeColor);
+        doc.roundedRect(M + 3, y + rowH / 2 - 3.8, 13, 7.5, 2, 2, 'F');
+        doc.setFontSize(7);
+        doc.setFont('helvetica', 'bold');
+        doc.setTextColor(255, 255, 255);
+        doc.text(label, M + 9.5, y + rowH / 2 + 1.2, { align: 'center' });
+
+        doc.setFontSize(7.5);
+        doc.setFont('helvetica', 'bold');
+        doc.setTextColor(55, 45, 35);
+        doc.text(qLines, M + 19, y + 6);
+
+        doc.setFontSize(7);
+        doc.setFont('helvetica', 'normal');
+        doc.setTextColor(100, 88, 76);
+        doc.text(iLines, M + 19, y + 6 + qLines.length * 3.8);
+
+        y += rowH + 2;
+      });
+
+      y += 4;
+
+      // ── TIPS ─────────────────────────────────────────────────────────
+      checkBreak(50);
+      sectionLabel(isAI ? 'AI-Personalised Tips — What To Do Next' : 'What To Do Next');
+
+      tips.forEach((tip, i) => {
+        const tipLines = doc.splitTextToSize(tip, CW - 22);
+        const tipH = tipLines.length * 4 + 10;
+
+        checkBreak(tipH + 3);
+
+        doc.setFillColor(255, 255, 255);
+        doc.roundedRect(M, y, CW, tipH, 1.5, 1.5, 'F');
+        doc.setDrawColor(232, 225, 212);
+        doc.setLineWidth(0.3);
+        doc.roundedRect(M, y, CW, tipH, 1.5, 1.5, 'S');
+
+        doc.setFillColor(193, 127, 43);
+        doc.circle(M + 7, y + tipH / 2, 5, 'F');
+        doc.setFontSize(9);
+        doc.setFont('helvetica', 'bold');
+        doc.setTextColor(255, 255, 255);
+        doc.text(`${i + 1}`, M + 7, y + tipH / 2 + 1.5, { align: 'center' });
+
+        doc.setFontSize(8.5);
+        doc.setFont('helvetica', 'normal');
+        doc.setTextColor(50, 40, 30);
+        doc.text(tipLines, M + 16, y + 7.5);
+
+        y += tipH + 2;
+      });
+
+      // ── FOOTER ───────────────────────────────────────────────────────
+      // Push footer toward bottom of current page
+      const footerY = Math.max(y + 12, H - 50);
+      if (footerY + 50 > H) {
+        newPage();
+        y = H - 52;
+      } else {
+        y = footerY;
+      }
+
+      doc.setDrawColor(193, 127, 43);
+      doc.setLineWidth(0.5);
+      doc.line(M, y, W - M, y);
+      y += 5;
+
+      if (logoB64) {
+        doc.addImage(logoB64, 'PNG', M, y, 17, 17);
+      }
+
+      doc.setFontSize(12);
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(50, 40, 30);
+      doc.text('Neeravna AI', M + 21, y + 8);
+
+      doc.setFontSize(8);
+      doc.setFont('helvetica', 'normal');
+      doc.setTextColor(100, 88, 76);
+      doc.text('by Neeraj — AI Product Manager from Structural Engineering', M + 21, y + 15);
+
+      y += 22;
+
+      doc.setFontSize(8.5);
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(193, 127, 43);
+      doc.textWithLink('www.neeravnaai.in', M, y, { url: 'https://www.neeravnaai.in' });
+
+      const w1 = doc.getTextWidth('www.neeravnaai.in');
+      doc.setTextColor(180, 165, 140);
+      doc.text('   |   ', M + w1, y);
+      const sep = doc.getTextWidth('   |   ');
+
+      doc.setTextColor(193, 127, 43);
+      doc.textWithLink('@neeravna.ai on Instagram', M + w1 + sep, y, {
+        url: 'https://www.instagram.com/neeravna.ai',
+      });
+
+      y += 8;
+
+      doc.setFontSize(7);
+      doc.setFont('helvetica', 'normal');
+      doc.setTextColor(165, 150, 130);
+      doc.text('Generated by Vastu Check App — a product by Neeravna AI', M, y);
+
+      doc.save(`vastu-report-${dir.shortCode}-${Date.now()}.pdf`);
+    } catch (err) {
+      console.error('PDF generation failed:', err);
+      alert('Could not generate PDF. Please try again.');
+    } finally {
+      setPdfGenerating(false);
+    }
+  }, [aiContent, tips, isAI, verdict]);
+
   const handleShare = useCallback(async () => {
     const text = [
-      `🧭 Vastu Check Report`,
+      `Vastu Check Report`,
       `Gate Direction: ${directionData.name} (${directionData.shortCode})${heading ? ` — ${heading}°` : ''}`,
       `Status: ${verdict.text}`,
       `Score: ${scoreResult.label}`,
@@ -93,7 +441,8 @@ export default function ResultScreen({
       `What to do next:`,
       ...tips.map((t, i) => `${i + 1}. ${t}`),
       ``,
-      `Checked with Vastu Check app`,
+      `Checked with Vastu Check — by Neeravna AI`,
+      `neeravnaai.in  |  @neeravna.ai`,
     ].join('\n');
 
     if (navigator.share) {
@@ -233,11 +582,19 @@ export default function ResultScreen({
         </div>
 
         {/* Actions */}
-        <div className="flex flex-col gap-3 pb-6">
+        <div className="flex flex-col gap-3">
+          <button
+            onClick={generatePDF}
+            disabled={pdfGenerating || aiLoading}
+            className="w-full py-4 rounded-2xl text-white text-base font-semibold active:opacity-80 transition-opacity disabled:opacity-50"
+            style={{ backgroundColor: '#C17F2B', minHeight: '56px' }}
+          >
+            {pdfGenerating ? 'Generating PDF…' : 'Download Report PDF 📄'}
+          </button>
           <button
             onClick={handleShare}
-            className="w-full py-4 rounded-2xl text-white text-base font-semibold active:opacity-80 transition-opacity"
-            style={{ backgroundColor: '#C17F2B', minHeight: '56px' }}
+            className="w-full py-4 rounded-2xl text-base font-semibold border-2 active:opacity-70 transition-opacity"
+            style={{ minHeight: '56px', borderColor: '#C17F2B', color: '#C17F2B', backgroundColor: 'transparent' }}
           >
             Share Report 📤
           </button>
@@ -248,6 +605,44 @@ export default function ResultScreen({
           >
             Check Another Entrance
           </button>
+        </div>
+
+        {/* Neeravna AI Branding Footer */}
+        <div className="py-5 flex flex-col items-center gap-2 border-t border-gray-100 pb-8">
+          <div className="flex items-center gap-2">
+            <Image
+              src="/logo.png"
+              alt="Neeravna AI"
+              width={28}
+              height={28}
+              className="rounded object-contain"
+            />
+            <span className="text-sm font-semibold text-gray-600">Neeravna AI</span>
+          </div>
+          <p className="text-xs text-gray-400 text-center leading-relaxed">
+            by Neeraj — AI Product Manager from Structural Engineering
+          </p>
+          <div className="flex items-center gap-3">
+            <a
+              href="https://www.neeravnaai.in"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-xs font-semibold"
+              style={{ color: '#C17F2B' }}
+            >
+              neeravnaai.in
+            </a>
+            <span className="text-gray-200">|</span>
+            <a
+              href="https://www.instagram.com/neeravna.ai"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-xs font-semibold"
+              style={{ color: '#C17F2B' }}
+            >
+              @neeravna.ai
+            </a>
+          </div>
         </div>
       </div>
     </div>
