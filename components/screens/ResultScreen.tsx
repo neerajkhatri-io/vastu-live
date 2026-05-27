@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { DirectionData, ScoreResult } from '@/lib/vastu';
 import { getTips } from '@/lib/vastu';
 import { QUESTIONS } from '@/lib/questions';
@@ -42,18 +42,22 @@ export default function ResultScreen({
   const [aiLoading, setAiLoading] = useState(true);
   const [aiError, setAiError] = useState(false);
 
+  // Capture props at mount time — never re-run this effect.
+  // directionData/answers/scoreResult are objects whose references change on
+  // every parent render (compass heading updates), which would re-trigger the
+  // call on every tick. We only ever want ONE call per result screen mount.
+  const initRef = useRef({ directionData, answers, scoreResult });
+
   useEffect(() => {
+    const { directionData: dir, answers: ans, scoreResult: score } = initRef.current;
     let cancelled = false;
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 8000);
 
-    setAiLoading(true);
-    setAiError(false);
-
     fetch('/api/vastu-ai', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ direction: directionData, answers, scoreResult }),
+      body: JSON.stringify({ direction: dir, answers: ans, scoreResult: score }),
       signal: controller.signal,
     })
       .then((res) => {
@@ -71,7 +75,8 @@ export default function ResultScreen({
       .finally(() => { clearTimeout(timeout); if (!cancelled) setAiLoading(false); });
 
     return () => { cancelled = true; controller.abort(); clearTimeout(timeout); };
-  }, [directionData, answers, scoreResult]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // intentionally empty — call exactly once on mount
 
   const tips = aiContent?.tips ?? staticTips;
   const isAI = !!aiContent;
